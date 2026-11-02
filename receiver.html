@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>WTA TV Custom Receiver</title>
+  <script src="//www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js"></script>
+  <style>
+    body {
+      margin: 0;
+      background-color: #0d0d0d;
+      overflow: hidden;
+    }
+
+    cast-media-player {
+      --theme-hue: 280;
+      --progress-color: #FFD700;
+      --splash-image: url('https://www.wtatv.com/assets/images/logo.png');
+      --splash-size: 260px;
+      --background-image: none;
+    }
+
+    /* Hide duration, timestamps, and progress bar position on TV when Anti-Spoiler is ON */
+    body.anti-spoiler cast-media-player {
+      --progress-color: transparent !important;
+    }
+  </style>
+</head>
+<body>
+  <cast-media-player></cast-media-player>
+
+  <script>
+    const context = cast.framework.CastReceiverContext.getInstance();
+    const playerManager = context.getPlayerManager();
+
+    // Inject CSS into <cast-media-player> Shadow DOM to hide time labels & scrubber
+    function applyShadowAntiSpoiler(enable) {
+      const player = document.querySelector('cast-media-player');
+      if (!player || !player.shadowRoot) return;
+
+      let style = player.shadowRoot.getElementById('anti-spoiler-shadow-style');
+      if (!style) {
+        style = document.createElement('style');
+        style.id = 'anti-spoiler-shadow-style';
+        player.shadowRoot.appendChild(style);
+      }
+
+      if (enable) {
+        document.body.classList.add('anti-spoiler');
+        style.textContent = `
+          .progressBar, .currentTime, .duration, .remainingTime,
+          [class*="time"], [class*="Time"], [class*="progress"], [class*="Progress"],
+          #progressBar, #currentTime, #duration {
+            display: none !important;
+            opacity: 0 !important;
+            visibility: hidden !important;
+          }
+        `;
+      } else {
+        document.body.classList.remove('anti-spoiler');
+        style.textContent = '';
+      }
+    }
+
+    // Intercept LOAD requests from the Android app to read customData.antiSpoiler
+    playerManager.setMessageInterceptor(
+      cast.framework.messages.MessageType.LOAD,
+      loadRequestData => {
+        const customData = loadRequestData.customData || {};
+        const isAntiSpoiler = Boolean(customData.antiSpoiler);
+        applyShadowAntiSpoiler(isAntiSpoiler);
+        return loadRequestData;
+      }
+    );
+
+    // Also allow toggling Anti-Spoiler mid-stream via a custom namespace
+    const CUSTOM_NS = 'urn:x-cast:com.unofficial.wtatv';
+    context.addCustomMessageListener(CUSTOM_NS, event => {
+      if (event.data && typeof event.data.antiSpoiler !== 'undefined') {
+        applyShadowAntiSpoiler(Boolean(event.data.antiSpoiler));
+      }
+    });
+
+    context.start();
+  </script>
+</body>
+</html>
