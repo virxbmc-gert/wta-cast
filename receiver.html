@@ -3,12 +3,25 @@
 <head>
   <meta charset="UTF-8">
   <title>WTA TV Custom Receiver</title>
-  <script src="//www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js"></script>
+  <script src="https://www.gstatic.com/cast/sdk/libs/receiver/2.0.0/cast_receiver.js"></script>
+  <script src="https://www.gstatic.com/cast/sdk/libs/mediaplayer/1.0.0/media_player.js"></script>
+  <script src="https://www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js"></script>
   <style>
-    body {
+    html, body {
       margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
       background-color: #0d0d0d;
       overflow: hidden;
+      font-family: sans-serif;
+    }
+
+    #legacy-video {
+      width: 100%;
+      height: 100%;
+      display: none;
+      background: #000;
     }
 
     cast-media-player {
@@ -19,68 +32,165 @@
       --background-image: none;
     }
 
-    /* Hide duration, timestamps, and progress bar position on TV when Anti-Spoiler is ON */
     body.anti-spoiler cast-media-player {
       --progress-color: transparent !important;
     }
   </style>
 </head>
 <body>
-  <cast-media-player></cast-media-player>
+  <video id="legacy-video"></video>
+  <cast-media-player id="caf-player"></cast-media-player>
 
   <script>
-    const context = cast.framework.CastReceiverContext.getInstance();
-    const playerManager = context.getPlayerManager();
+    const CUSTOM_NS = 'urn:x-cast:com.unofficial.wtatv';
+    let isAntiSpoilerActive = true;
 
-    // Inject CSS into <cast-media-player> Shadow DOM to hide time labels & scrubber
-    function applyShadowAntiSpoiler(enable) {
-      const player = document.querySelector('cast-media-player');
-      if (!player || !player.shadowRoot) return;
+    function enforceTvAntiSpoiler() {
+      const player = document.getElementById('caf-player');
+      if (!player) return;
 
-      let style = player.shadowRoot.getElementById('anti-spoiler-shadow-style');
-      if (!style) {
-        style = document.createElement('style');
-        style.id = 'anti-spoiler-shadow-style';
-        player.shadowRoot.appendChild(style);
+      if (isAntiSpoilerActive) {
+        document.body.classList.add('anti-spoiler');
+      } else {
+        document.body.classList.remove('anti-spoiler');
       }
 
-      if (enable) {
-        document.body.classList.add('anti-spoiler');
-        style.textContent = `
+      // 1. Inject style block into open Shadow DOM if accessible
+      if (player.shadowRoot) {
+        let style = player.shadowRoot.getElementById('anti-spoiler-shadow-style');
+        if (!style) {
+          style = document.createElement('style');
+          style.id = 'anti-spoiler-shadow-style';
+          player.shadowRoot.appendChild(style);
+        }
+        style.textContent = isAntiSpoilerActive ? `
           .progressBar, .currentTime, .duration, .remainingTime,
           [class*="time"], [class*="Time"], [class*="progress"], [class*="Progress"],
-          #progressBar, #currentTime, #duration {
+          [class*="scrubber"], [class*="Scrubber"], [class*="seek"], [class*="Seek"],
+          #progressBar, #currentTime, #duration, # controls {
             display: none !important;
             opacity: 0 !important;
             visibility: hidden !important;
           }
-        `;
-      } else {
-        document.body.classList.remove('anti-spoiler');
-        style.textContent = '';
+        ` : '';
       }
+
+      // 2. Keep the video element visible while hiding surrounding HUD overlays
+      const roots = [player, player.shadowRoot].filter(Boolean);
+      roots.forEach(root => {
+        const allEls = root.querySelectorAll('*');
+        allEls.forEach(el => {
+          const tag = el.tagName ? el.tagName.toLowerCase() : '';
+          if (tag === 'video') {
+            el.style.cssText = 'visibility: visible !important; opacity: 1 !important; display: block !important; width: 100vw !important; height: 100vh !important; position: fixed !important; top: 0 !important; left: 0 !important; z-index: 9999 !important; background: #000 !important;';
+          } else if (!el.querySelector || !el.querySelector('video')) {
+            if (isAntiSpoilerActive) {
+              el.style.setProperty('opacity', '0', 'important');
+              el.style.setProperty('visibility', 'hidden', 'important');
+            } else {
+              el.style.removeProperty('opacity');
+              el.style.removeProperty('visibility');
+            }
+          }
+        });
+      });
     }
 
-    // Intercept LOAD requests from the Android app to read customData.antiSpoiler
-    playerManager.setMessageInterceptor(
-      cast.framework.messages.MessageType.LOAD,
-      loadRequestData => {
-        const customData = loadRequestData.customData || {};
-        const isAntiSpoiler = Boolean(customData.antiSpoiler);
-        applyShadowAntiSpoiler(isAntiSpoiler);
-        return loadRequestData;
-      }
-    );
+    function setAntiSpoiler(enable) {
+      isAntiSpoilerActive = Boolean(enable);
+      enforceTvAntiSpoiler();
+    }
 
-    // Also allow toggling Anti-Spoiler mid-stream via a custom namespace
-    const CUSTOM_NS = 'urn:x-cast:com.unofficial.wtatv';
-    context.addCustomMessageListener(CUSTOM_NS, event => {
-      if (event.data && typeof event.data.antiSpoiler !== 'undefined') {
-        applyShadowAntiSpoiler(Boolean(event.data.antiSpoiler));
-      }
-    });
+    // Continuously enforce every 500ms so seeking/pausing doesn't flash the duration
+    setInterval(enforceTvAntiSpoiler, 500);
 
-    context.start();
+    function bootCafV3() {
+      const context = cast.framework.CastReceiverContext.getInstance();
+      const playerManager = context.getPlayerManager();
+
+      playerManager.setMessageInterceptor(
+        cast.framework.messages.MessageType.LOAD,
+        loadRequestData => {
+          if (loadRequestData && loadRequestData.customData && typeof loadRequestData.customData.antiSpoiler !== 'undefined') {
+            setAntiSpoiler(Boolean(loadRequestData.customData.antiSpoiler));
+          }
+          return loadRequestData;
+        }
+      );
+
+      playerManager.addEventListener(
+        cast.framework.events.EventType.PLAYING,
+        () => {
+          enforceTvAntiSpoiler();
+        }
+      );
+
+      context.addCustomMessageListener(CUSTOM_NS, event => {
+        try {
+          const data = typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
+          if (data && typeof data.antiSpoiler !== 'undefined') {
+            setAntiSpoiler(Boolean(data.antiSpoiler));
+          }
+        } catch (e) {}
+      });
+
+      const options = new cast.framework.CastReceiverOptions();
+      options.customNamespaces = Object.assign({});
+      options.customNamespaces[CUSTOM_NS] = cast.framework.system.MessageType.JSON;
+      options.disableIdleTimeout = true;
+
+      context.start(options);
+    }
+
+    function bootReceiverV2() {
+      const cafEl = document.getElementById('caf-player');
+      if (cafEl) cafEl.style.display = 'none';
+
+      const videoEl = document.getElementById('legacy-video');
+      videoEl.style.display = 'block';
+
+      const mediaManager = new cast.receiver.MediaManager(videoEl);
+      const origOnLoad = mediaManager.onLoad.bind(mediaManager);
+      let player = null;
+
+      mediaManager.onLoad = function(event) {
+        try {
+          if (player) {
+            player.unload();
+            player = null;
+          }
+          const url = event.data.media.contentId;
+          const initStart = event.data.currentTime || 0;
+          const host = new cast.player.api.Host({ mediaElement: videoEl, url: url });
+          player = new cast.player.api.Player(host);
+          const protocol = cast.player.api.CreateHlsStreamingProtocol(host);
+          player.load(protocol, initStart);
+          mediaManager.sendLoadComplete();
+        } catch (err) {
+          origOnLoad(event);
+        }
+      };
+
+      const manager = cast.receiver.CastReceiverManager.getInstance();
+      const customBus = manager.getCastMessageBus(CUSTOM_NS);
+      customBus.onMessage = function(event) {};
+
+      manager.start({ maxInactivity: 3600 });
+    }
+
+    let attempts = 0;
+    const waitTimer = setInterval(() => {
+      attempts++;
+      if (window.cast && window.cast.framework && window.cast.framework.CastReceiverContext) {
+        clearInterval(waitTimer);
+        bootCafV3();
+      } else if (window.cast && window.cast.receiver && window.cast.receiver.CastReceiverManager && attempts > 15) {
+        clearInterval(waitTimer);
+        bootReceiverV2();
+      } else if (attempts > 80) {
+        clearInterval(waitTimer);
+      }
+    }, 100);
   </script>
 </body>
 </html>
