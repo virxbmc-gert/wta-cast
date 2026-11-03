@@ -3,8 +3,6 @@
 <head>
   <meta charset="UTF-8">
   <title>WTA TV Custom Receiver</title>
-  <script src="https://www.gstatic.com/cast/sdk/libs/receiver/2.0.0/cast_receiver.js"></script>
-  <script src="https://www.gstatic.com/cast/sdk/libs/mediaplayer/1.0.0/media_player.js"></script>
   <script src="https://www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js"></script>
   <style>
     html, body {
@@ -38,8 +36,9 @@
   </style>
 </head>
 <body>
-  <p>Does this <strong>fucking</strong> receiver work!</p>
-  <video id="legacy-video"></video>
+ <p style="color: #00FF00; font-size: 32px; position: fixed; top: 20px; left: 20px; z-index: 99999; margin: 0;">
+  Custom Receiver Loaded
+</p>
   <cast-media-player id="caf-player"></cast-media-player>
 
   <script>
@@ -141,42 +140,6 @@
       options.disableIdleTimeout = true;
 
       context.start(options);
-    }
-
-    function bootReceiverV2() {
-      const cafEl = document.getElementById('caf-player');
-      if (cafEl) cafEl.style.display = 'none';
-
-      const videoEl = document.getElementById('legacy-video');
-      videoEl.style.display = 'block';
-
-      const mediaManager = new cast.receiver.MediaManager(videoEl);
-      const origOnLoad = mediaManager.onLoad.bind(mediaManager);
-      let player = null;
-
-      mediaManager.onLoad = function(event) {
-        try {
-          if (player) {
-            player.unload();
-            player = null;
-          }
-          const url = event.data.media.contentId;
-          const initStart = event.data.currentTime || 0;
-          const host = new cast.player.api.Host({ mediaElement: videoEl, url: url });
-          player = new cast.player.api.Player(host);
-          const protocol = cast.player.api.CreateHlsStreamingProtocol(host);
-          player.load(protocol, initStart);
-          mediaManager.sendLoadComplete();
-        } catch (err) {
-          origOnLoad(event);
-        }
-      };
-
-      const manager = cast.receiver.CastReceiverManager.getInstance();
-      const customBus = manager.getCastMessageBus(CUSTOM_NS);
-      customBus.onMessage = function(event) {};
-
-      manager.start({ maxInactivity: 3600 });
     }
 
     let attempts = 0;
