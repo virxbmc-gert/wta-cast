@@ -14,25 +14,81 @@
       overflow: hidden;
       font-family: sans-serif;
     }
+
     cast-media-player {
       --theme-hue: 280;
       --progress-color: #FFD700;
+      --splash-image: url('https://www.wtatv.com/assets/images/logo.png');
+      --splash-size: 260px;
       --background-image: none;
     }
+
     body.anti-spoiler cast-media-player {
       --progress-color: transparent !important;
     }
   </style>
 </head>
 <body>
-  <p style="color: #00FF00; font-size: 32px; position: fixed; top: 20px; left: 20px; z-index: 99999; margin: 0;">
-    Custom Receiver Loaded 2
-  </p>
   <cast-media-player id="caf-player"></cast-media-player>
 
   <script>
     const CUSTOM_NS = 'urn:x-cast:com.unofficial.wtatv';
     let isAntiSpoilerActive = true;
+
+    const ANTI_SPOILER_CSS = `
+      .progressBar, .currentTime, .duration, .remainingTime,
+      .controls-progress, .player-controls-progress,
+      [class*="time"], [class*="Time"], [class*="progress"], [class*="Progress"],
+      [class*="scrubber"], [class*="Scrubber"], [class*="seek"], [class*="Seek"],
+      [id*="time"], [id*="Time"], [id*="progress"], [id*="Progress"],
+      #progressBar, #currentTime, #duration, touch-controls {
+        display: none !important;
+        opacity: 0 !important;
+        visibility: hidden !important;
+        pointer-events: none !important;
+      }
+    `;
+
+    // Recursively traverses light DOM and all open Shadow DOMs
+    function applyAntiSpoilerToRoot(root) {
+      if (!root) return;
+
+      // 1. Inject style block into every ShadowRoot we encounter
+      if (root instanceof ShadowRoot || root === document.head) {
+        let style = root.querySelector ? root.querySelector('#anti-spoiler-shadow-style') : null;
+        if (!style) {
+          style = document.createElement('style');
+          style.id = 'anti-spoiler-shadow-style';
+          root.appendChild(style);
+        }
+        style.textContent = isAntiSpoilerActive ? ANTI_SPOILER_CSS : '';
+      }
+
+      // 2. Scan all elements inside this root
+      const elements = root.querySelectorAll ? root.querySelectorAll('*') : [];
+      elements.forEach(el => {
+        // Recurse into nested shadow roots (e.g., <touch-controls> inside <cast-media-player>)
+        if (el.shadowRoot) {
+          applyAntiSpoilerToRoot(el.shadowRoot);
+        }
+
+        const tag = el.tagName ? el.tagName.toLowerCase() : '';
+        if (tag === 'video' || tag === 'cast-media-player') return;
+
+        // Check if this leaf element displays a timestamp (e.g. "01:24:10" or "45:12")
+        if (el.children.length === 0 && el.textContent && /\d+:\d{2}/.test(el.textContent)) {
+          if (isAntiSpoilerActive) {
+            el.style.setProperty('display', 'none', 'important');
+            el.style.setProperty('visibility', 'hidden', 'important');
+            el.style.setProperty('opacity', '0', 'important');
+          } else {
+            el.style.removeProperty('display');
+            el.style.removeProperty('visibility');
+            el.style.removeProperty('opacity');
+          }
+        }
+      });
+    }
 
     function enforceTvAntiSpoiler() {
       const player = document.getElementById('caf-player');
@@ -44,23 +100,10 @@
         document.body.classList.remove('anti-spoiler');
       }
 
+      applyAntiSpoilerToRoot(document.head);
+      applyAntiSpoilerToRoot(player);
       if (player.shadowRoot) {
-        let style = player.shadowRoot.getElementById('anti-spoiler-shadow-style');
-        if (!style) {
-          style = document.createElement('style');
-          style.id = 'anti-spoiler-shadow-style';
-          player.shadowRoot.appendChild(style);
-        }
-        style.textContent = isAntiSpoilerActive ? `
-          .progressBar, .currentTime, .duration, .remainingTime,
-          [class*="time"], [class*="Time"], [class*="progress"], [class*="Progress"],
-          [class*="scrubber"], [class*="Scrubber"], [class*="seek"], [class*="Seek"],
-          #progressBar, #currentTime, #duration, #controls {
-            display: none !important;
-            opacity: 0 !important;
-            visibility: hidden !important;
-          }
-        ` : '';
+        applyAntiSpoilerToRoot(player.shadowRoot);
       }
     }
 
@@ -69,7 +112,8 @@
       enforceTvAntiSpoiler();
     }
 
-    setInterval(enforceTvAntiSpoiler, 500);
+    // Run every 250ms so seeking/pausing never flashes the duration
+    setInterval(enforceTvAntiSpoiler, 250);
 
     const context = cast.framework.CastReceiverContext.getInstance();
     const playerManager = context.getPlayerManager();
@@ -80,14 +124,24 @@
         if (loadRequestData && loadRequestData.customData && typeof loadRequestData.customData.antiSpoiler !== 'undefined') {
           setAntiSpoiler(Boolean(loadRequestData.customData.antiSpoiler));
         }
+        // Strip metadata duration when anti-spoiler is active
+        if (isAntiSpoilerActive && loadRequestData && loadRequestData.media) {
+          delete loadRequestData.media.duration;
+        }
         return loadRequestData;
       }
     );
 
-    playerManager.addEventListener(
+    // Intercept SEEK and PAUSE so the HUD is scrubbed the instant it wakes up
+    [
       cast.framework.events.EventType.PLAYING,
-      () => enforceTvAntiSpoiler()
-    );
+      cast.framework.events.EventType.PAUSE,
+      cast.framework.events.EventType.SEEKING,
+      cast.framework.events.EventType.SEEKED,
+      cast.framework.events.EventType.TIME_UPDATE
+    ].forEach(evt => {
+      playerManager.addEventListener(evt, () => enforceTvAntiSpoiler());
+    });
 
     context.addCustomMessageListener(CUSTOM_NS, event => {
       try {
