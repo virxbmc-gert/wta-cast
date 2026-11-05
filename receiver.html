@@ -131,6 +131,15 @@
         return loadRequestData;
       }
     );
+    playerManager.setMessageInterceptor(
+      cast.framework.messages.MessageType.MEDIA_STATUS,
+      status => {
+        if (isAntiSpoilerActive && status && status.media) {
+          status.media.duration = null;
+        }
+        return status;
+      }
+    );
 
     // Intercept SEEK and PAUSE so the HUD is scrubbed the instant it wakes up
     [
